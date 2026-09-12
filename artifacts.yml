@@ -1,7 +1,7 @@
 name: Artifacts upload pipeline
 
 on:
-  push:
+  pull:
     branches:
       - main
 
