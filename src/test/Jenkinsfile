@@ -1,0 +1,80 @@
+pipeline {
+    agent any
+
+    tools {
+        // Must match tools configured in Manage Jenkins -> Tools
+        maven 'Maven-3.9.6'
+        jdk 'JDK-17'
+    }
+
+    environment {
+        AWS_EC2_HOST = 'ec2-user@<YOUR-AWS-EC2-PUBLIC-IP>'
+        DEPLOY_DIR   = '/var/www/app'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                echo 'Pulling latest changes from Git repository...'
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo 'Compiling the application...'
+                sh 'mvn clean compile'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running automated JUnit test suites...'
+                sh 'mvn test'
+            }
+            post {
+                always {
+                    // Collect and archive JUnit test result XMLs
+                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: false
+                }
+            }
+        }
+
+        stage('Package') {
+            steps {
+                echo 'Packaging application artifact...'
+                sh 'mvn package -DskipTests'
+            }
+        }
+
+        stage('Deploy to AWS') {
+            when {
+                branch 'main'
+            }
+            steps {
+                echo 'Deploying artifact to AWS EC2...'
+                sshagent(['aws-ec2-ssh-key']) {
+                    sh '''
+                        # Create destination directory if missing
+                        ssh -o StrictHostKeyChecking=no ${AWS_EC2_HOST} "mkdir -p ${DEPLOY_DIR}"
+
+                        # Copy JAR/WAR artifact to EC2
+                        scp -o StrictHostKeyChecking=no target/*.jar ${AWS_EC2_HOST}:${DEPLOY_DIR}/app.jar
+
+                        # Restart the application service on EC2
+                        ssh -o StrictHostKeyChecking=no ${AWS_EC2_HOST} "sudo systemctl restart my-app.service || nohup java -jar ${DEPLOY_DIR}/app.jar > ${DEPLOY_DIR}/app.log 2>&1 &"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline executed successfully: Tests passed and build deployed.'
+        }
+        failure {
+            echo 'Pipeline failed. Check build console logs or test result reports.'
+        }
+    }
+}
